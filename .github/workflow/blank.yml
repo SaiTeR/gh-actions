@@ -1,0 +1,44 @@
+name: Nginx CI / CD
+
+on:
+  push:                
+    branches: ["dev"]   # При коммите в ветку "dev"
+  pull_request:        
+    branches: ["main"]  # При закрытии Pull Request в ветку "main" (Не важно утвержденный или нет. Надо будет дописать в условиях джобы)
+    types: [ closed ]
+
+jobs:
+  test-and-build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: |
+          docker build -t nginx:dev .
+
+      - name: Run nginx container
+        run: |
+          docker run -d -p 8080:80 nginx:dev
+
+      - name: Test nginx
+        run: |
+          curl -f http://localhost:8080 || exit 1
+
+      - name: Push image to server
+        run: |
+          echo "${{ secrets.INSTANCE_PRIVATE_KEY }}" > private_key
+          chmod 600 private_key
+
+          ssh -i private_key -o StrictHostKeyChecking=no ${{ secrets.USERNAME }}@${{ secrets.IP }} "sudo docker rmi nginx:dev || echo 'No image to delete'"
+          
+          docker save nginx:dev | ssh -i private_key -o StrictHostKeyChecking=no ${{ secrets.USERNAME }}@${{ secrets.IP }} 'sudo docker load'
+          
+          ssh -i private_key -o StrictHostKeyChecking=no ${{ secrets.USERNAME }}@${{ secrets.IP }} \
+          "sudo docker image inspect nginx:dev > /dev/null 2>&1 && echo 'Image successfully loaded' || { echo 'Failed to load image'; exit 1; }"
+
